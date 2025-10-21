@@ -8,33 +8,30 @@
 #define FMT_BLUE    "\x1b[34m"
 #define FMT_RESET   "\x1b[0m"
 
-
-enum {
-	SFX_LOG_LATENCY_READ_STATS  = 0xc1,
-	SFX_LOG_EXTENDED_HEALTH     = 0xc2,
-	SFX_LOG_LATENCY_WRITE_STATS = 0xc3,
-	SFX_LOG_QUAL                = 0xc4,
-	SFX_LOG_MISMATCHLBA         = 0xc5,
-	SFX_LOG_MEDIA               = 0xc6,
-	SFX_LOG_BBT                 = 0xc7,
-	SFX_LOG_IDENTIFY            = 0xcc,
-	SFX_FEAT_ATOMIC             = 0x01,
-	SFX_FEAT_UP_P_CAP           = 0xac,
-	SFX_LOG_EXTENDED_HEALTH_ALT = 0xd2,
-	SFX_FEAT_CLR_CARD           = 0xdc,
-};
-
-enum {
+enum SFX_CRIT_WARN {
 	SFX_CRIT_PWR_FAIL_DATA_LOSS = 0x01,
 	SFX_CRIT_OVER_CAP           = 0x02,
 	SFX_CRIT_RW_LOCK            = 0x04,
 };
 
+enum SFX_PRODUCT {
+	SFX_MYRTLE                  = 0x0,
+	SFX_QUINCE                  = 0x1,
+};
+
 enum sfx_nvme_admin_opcode {
-	nvme_admin_query_cap_info   = 0xd3,
 	nvme_admin_change_cap       = 0xd4,
-	nvme_admin_sfx_set_features = 0xd5,
-	nvme_admin_sfx_get_features = 0xd6,
+	nvme_admin_query_cap_info   = 0xd6,
+};
+
+struct sfx_device_config {
+	char  vendor_name[32];
+	char  vendor_id[8];
+	char  device_id[8];
+	__u32 product_id;
+	__u32 smartlog_id;
+	char  ctrl_name[16];
+	char  pcie_slot[64];
 };
 
 struct sfx_freespace_ctx {
@@ -51,11 +48,17 @@ struct sfx_freespace_ctx {
 	__u64 friendly_change_cap_support;
 };
 
-struct nvme_capacity_info {
-	__u64 lba_sec_sz;
-	__u64 phy_sec_sz;
-	__u64 used_space;
-	__u64 free_space;
+struct nvme_cust_args {
+	__u32 *result;
+	void  *data;
+	__u32  opcode;
+	__u32  timeout;
+	__u32  cdw11;
+	__u32  bufid;
+	__u32  cdw13;
+	__u32  cdw14;
+	__u32  custid;
+	__u32  data_len;
 };
 
 struct __packed nvme_additional_smart_log_item {
@@ -72,32 +75,21 @@ struct __packed nvme_additional_smart_log_item {
 		} wear_level;
 		struct __packed thermal_throttle {
 			__u8    pct;
-			__u32    count;
+			__u32   count;
 		} thermal_throttle;
 	};
 	__u8            _rp;
 };
 
-struct __packed sfx_lat_stats_vanda {
+struct __packed sfx_lat_stats {
 	__u16    maj;
 	__u16    min;
-	__u32     bucket_1[32];    /* 0~1ms, step 32us */
-	__u32     bucket_2[31];    /* 1~32ms, step 1ms */
-	__u32     bucket_3[31];    /* 32ms~1s, step 32ms */
-	__u32     bucket_4[1];     /* 1s~2s, specifically 1024ms~2047ms */
-	__u32     bucket_5[1];     /* 2s~4s, specifically 2048ms~4095ms */
-	__u32     bucket_6[1];     /* 4s+, specifically 4096ms+ */
-};
-
-struct __packed sfx_lat_stats_myrtle {
-	__u16    maj;
-	__u16    min;
-	__u32     bucket_1[64]; /* 0us~63us, step 1us */
-	__u32     bucket_2[64]; /* 63us~127us, step 1us */
-	__u32     bucket_3[64]; /* 127us~255us, step 2us */
-	__u32     bucket_4[64]; /* 255us~510us, step 4us */
-	__u32     bucket_5[64]; /* 510us~1.02ms step 8us */
-	__u32     bucket_6[64]; /* 1.02ms~2.04ms step 16us */
+	__u32    bucket_1[64];  /* 0us~63us, step 1us */
+	__u32    bucket_2[64];  /* 63us~127us, step 1us */
+	__u32    bucket_3[64];  /* 127us~255us, step 2us */
+	__u32    bucket_4[64];  /* 255us~510us, step 4us */
+	__u32    bucket_5[64];  /* 510us~1.02ms step 8us */
+	__u32    bucket_6[64];  /* 1.02ms~2.04ms step 16us */
 	__u32    bucket_7[64];  /* 2.04ms~4.08ms step 32us */
 	__u32    bucket_8[64];  /* 4.08ms~8.16ms step 64us */
 	__u32    bucket_9[64];  /* 8.16ms~16.32ms step 128us */
@@ -112,20 +104,6 @@ struct __packed sfx_lat_stats_myrtle {
 	__u32    bucket_18[64]; /* 4.18s~8.36s step 65.536ms */
 	__u32    bucket_19[64]; /* 8.36s~ step 131.072ms */
 	__u64    average;       /* average latency statistics */
-};
-
-
-struct __packed sfx_lat_status_ver {
-	__u16 maj;
-	__u16 min;
-};
-
-struct sfx_lat_stats {
-	union {
-		struct sfx_lat_status_ver   ver;
-		struct sfx_lat_stats_vanda  vanda;
-		struct sfx_lat_stats_myrtle myrtle;
-	};
 };
 
 struct nvme_additional_smart_log {
@@ -152,11 +130,13 @@ struct nvme_additional_smart_log {
 	struct nvme_additional_smart_log_item compression_path_err_cnt;
 	struct nvme_additional_smart_log_item out_of_space_flag;
 	struct nvme_additional_smart_log_item physical_usage_ratio;
-	struct nvme_additional_smart_log_item grown_bb; /* grown bad block */
+	struct nvme_additional_smart_log_item grown_bb_count; /* grown bad block */
+	struct nvme_additional_smart_log_item system_area_life_remaining;
+	struct nvme_additional_smart_log_item user_available_space_rate;
+	struct nvme_additional_smart_log_item over_provisioning_rate;
 };
 
-
-struct __packed extended_health_info_myrtle {
+struct __packed extended_health_info {
 	__u32            soft_read_recoverable_errs;
 	__u32            flash_die_raid_recoverable_errs;
 	__u32            pcie_rx_correct_errs;
